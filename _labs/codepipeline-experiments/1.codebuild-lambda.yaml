@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template to create an AWS Lambda function and CodeBuild project.
+  https://github.com/obervinov/aws-dop-c02/_labs/codepipeline-experiments/1.codebuild-lambda.yaml
+
+Parameters:
+  PipelineName:
+    Type: String
+    Description: Name of the CodePipeline.
+    Default: LambdaBuildAndPublishPipeline
+
+  OutputVariableBucketName:
+    Type: String
+    Description: Name of the output S3 bucket for CodePipeline artifacts.
+    Default: codedeploy-environment-bucket-name
+
+  OutputVariableBucketArn:
+    Type: String
+    Description: ARN of the output S3 bucket for CodePipeline artifacts.
+    Default: codedeploy-environment-bucket-arn
+
+Resources:
+  # --- IAM Roles ---
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildS3AccessAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !ImportValue "${OutputVariableBucketArn}"
+                  - !Join ["/", [!ImportValue "${OutputVariableBucketArn}", "*"]]
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${PipelineName}-LambdaPackager
+
+  # CodePipeline Service Role
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelineAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource:
+                  - !ImportValue "${OutputVariableBucketArn}"
+                  - !Join ["/", [!ImportValue "${OutputVariableBucketArn}", "*"]]
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${PipelineName}-LambdaPackager
+
+  # --- CodeBuild Project ---
+  # Building Lambda Function
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${PipelineName}-LambdaPackager"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      # Publishing the artifact to S3
+      Artifacts:
+        Type: S3
+        Location: !ImportValue "${OutputVariableBucketName}"
+        Path: /
+        NamespaceType: BUILD_ID
+        Name: 1_lambda_function_invocation.zip
+        Packaging: ZIP
+        OverrideArtifactName: true
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/nodejs:20.12.0
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 20
+            build:
+              commands:
+                - echo "Writing Lambda function code..."
+                - |
+                  cat << 'EOF' > index.js
+                  import { CodePipelineClient, PutJobSuccessResultCommand, PutJobFailureResultCommand } from "@aws-sdk/client-codepipeline";
+                  import http from 'http';
+                  import assert from 'assert';
+                  
+                  export const handler = (event, context) => {
+                  
+                      const codepipeline = new CodePipelineClient();
+                  
+                      // Retrieve the Job ID from the Lambda action
+                      const jobId = event["CodePipeline.job"].id;
+                  
+                      // Retrieve the value of UserParameters from the Lambda action configuration in CodePipeline, in this case a URL which will be
+                      // health checked by this function.
+                      const url = event["CodePipeline.job"].data.actionConfiguration.configuration.UserParameters;
+                  
+                      // Notify CodePipeline of a successful job
+                      const putJobSuccess = async function(message) {
+                          const command = new PutJobSuccessResultCommand({
+                              jobId: jobId
+                          });
+                          try {
+                              await codepipeline.send(command);
+                              context.succeed(message);
+                          } catch (err) {
+                              context.fail(err); 
+                          }
+                      };
+                  
+                      // Notify CodePipeline of a failed job
+                      const putJobFailure = async function(message) {
+                          const command = new PutJobFailureResultCommand({
+                              jobId: jobId,
+                              failureDetails: {
+                                  message: JSON.stringify(message),
+                                  type: 'JobFailed',
+                                  externalExecutionId: context.awsRequestId
+                              }
+                          });
+                          await codepipeline.send(command);
+                          context.fail(message);
+                      };
+                  
+                      // Validate the URL passed in UserParameters
+                      if(!url || url.indexOf('http://') === -1) {
+                          putJobFailure('The UserParameters field must contain a valid URL address to test, including http:// or https://');  
+                          return;
+                      }
+                  
+                      // Helper function to make a HTTP GET request to the page.
+                      // The helper will test the response and succeed or fail the job accordingly
+                      const getPage = function(url, callback) {
+                          var pageObject = {
+                              body: '',
+                              statusCode: 0,
+                              contains: function(search) {
+                                  return this.body.indexOf(search) > -1;
+                              }
+                          };
+                          http.get(url, function(response) {
+                              pageObject.body = '';
+                              pageObject.statusCode = response.statusCode;
+                  
+                              response.on('data', function (chunk) {
+                                  pageObject.body += chunk;
+                              });
+                  
+                              response.on('end', function () {
+                                  callback(pageObject);
+                              });
+                  
+                              response.resume();
+                          }).on('error', function(error) {
+                              // Fail the job if our request failed
+                              putJobFailure(error);
+                          });
+                      };
+                  
+                      getPage(url, function(returnedPage) {
+                          try {
+                              // Check if the HTTP response has a 200 status
+                              assert(returnedPage.statusCode === 200);
+                              // Check if the page contains the text "Congratulations"
+                              // You can change this to check for different text, or add other tests as required
+                              assert(returnedPage.contains('Congratulations'));
+                  
+                              // Succeed the job
+                              putJobSuccess("Tests passed.");
+                          } catch (ex) {
+                              // If any of the assertions failed then fail the job
+                              putJobFailure(ex);
+                          }
+                      });
+                  };
+                  EOF
+                - echo "Zipping Lambda function code..."
+                - zip -r 1_lambda_function_invocation.zip index.js
+          artifacts:
+            files:
+              - 1_lambda_function_invocation.zip
+            discard-paths: no
+
+  # --- CodePipeline ---
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref PipelineName
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !ImportValue "${OutputVariableBucketName}"
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GetTrigger
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                S3Bucket: !ImportValue "${OutputVariableBucketName}"
+                S3ObjectKey: 1.codebuild-lambda-trigger.zip
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: BuildAndPublishLambda
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              InputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              RunOrder: 1
+
+Outputs:
+  CodePipelineUrl:
+    Description: URL to the created CodePipeline.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${PipelineName}/view?region=${AWS::Region}"

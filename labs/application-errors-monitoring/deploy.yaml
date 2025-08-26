@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  CloudFormation Template to test web application errors monitoring
+  https://github.com/obervinov/aws-dop-c02/_labs/application-errors-monitoring/deploy.yaml
+
+Parameters:
+  LatestAmiId:
+    Description: Latest Amazon Linux 2023 AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  InstanceType:
+    Description: CodeDeploy agent EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t3.micro
+      - t2.micro
+    ConstraintDescription: must be a valid EC2 instance type from Free Tier.
+
+  SSHKeyName:
+    Description: Name of an existing SSH key pair
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: ssh-key-name
+
+  EmailAddress:
+    Description: Email address to receive error notifications
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: sns-email-notification-address
+
+Resources:
+  # Create new VPC for the web application
+  # VPC -> Internet Gateway -> Internet Gateway Attachment to VPC -> Public Route Table -> Public Route Rule -> Subnets -> Subnets Table Association
+  WebAppVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  WebAppGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  WebAppGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref WebAppVPC
+      InternetGatewayId: !Ref WebAppGateway
+
+  WebAppPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WebAppVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  WebAppPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: WebAppGatewayAttachment
+    Properties:
+      RouteTableId: !Ref WebAppPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref WebAppGateway
+
+  WebAppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WebAppVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-subnet1"
+
+  WebAppSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WebAppSubnet1
+      RouteTableId: !Ref WebAppPublicRouteTable
+
+  WebAppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WebAppVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-subnet2"
+
+  WebAppSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WebAppSubnet2
+      RouteTableId: !Ref WebAppPublicRouteTable
+
+  # Create new autoscaling group to provision EC2 instances
+  # AutoScalingGroup -> LaunchTemplate -> EC2 Instance
+  WebAppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebAppLaunchTemplate
+        Version: !GetAtt WebAppLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref WebAppSubnet1
+        - !Ref WebAppSubnet2
+      TargetGroupARNs:
+        - !Ref WebAppTargetGroup
+
+  WebAppLogCloudWatchAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-cw-agent-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-cw-agent-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+
+  WebAppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${AWS::StackName}-instance-profile"
+      Roles:
+        - !Ref WebAppLogCloudWatchAgentRole
+      Path: /
+
+  WebAppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-launch-template"
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref SSHKeyName
+        IamInstanceProfile:
+          Arn: !GetAtt WebAppInstanceProfile.Arn
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            DeleteOnTermination: true
+            Groups:
+              - !Ref WebAppInstanceSecurityGroup
+              - !Ref SSHInstanceSecurityGroup
+        UserData: !Base64 |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd amazon-cloudwatch-agent
+          echo "Hello World from $(hostname -f)" > /var/www/html/index.html
+          systemctl start httpd
+          # Setup CloudWatch Agent to monitor Apache logs
+          curl https://gist.githubusercontent.com/obervinov/7e4faf1dcdaa5addb47cb2c605853aa1/raw/ba8787838827df74c39c691a0ff8b389da7018f9/cloudwatch-agent-httpd-log-config.json -o /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+          systemctl start amazon-cloudwatch-agent
+
+  # Create security group for load balancer and instances for external traffic access
+  # Traffic flow: ELB (SecurityGroup + Listener + TargetGroup) -> EC2 Instances(SecurityGroup)
+  WebAppLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic
+      VpcId: !Ref WebAppVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebAppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-elb"
+      Subnets:
+        - !Ref WebAppSubnet1
+        - !Ref WebAppSubnet2
+      SecurityGroups:
+        - !Ref WebAppLoadBalancerSecurityGroup
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-tg"
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref WebAppVPC
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+
+  WebAppListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WebAppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAppTargetGroup
+
+  WebAppInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from Load Balancer
+      VpcId: !Ref WebAppVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref WebAppLoadBalancerSecurityGroup
+
+  SSHInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH access from anywhere to debug instance app
+      VpcId: !Ref WebAppVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  WebAppAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: apache-access-logs
+      RetentionInDays: 1
+
+  WebAppErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: apache-error-logs
+      RetentionInDays: 1
+
+  WebAppAccessLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref WebAppAccessLogGroup
+      LogStreamName: "webapp-access-log-stream"
+
+  WebAppErrorLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref WebAppErrorLogGroup
+      LogStreamName: "webapp-error-log-stream"
+
+  # Active traffic because it easier to simulate
+  WebAppErrorLogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-active-traffic-alarm"
+      AlarmDescription: "Alarm when there is active traffic in the web application"
+      Namespace: "AWS/Logs"
+      MetricName: "IncomingLogEvents"
+      Dimensions:
+        - Name: LogGroupName
+          Value: !Ref WebAppAccessLogGroup
+      Statistic: Sum
+      Period: 10
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref WebAppSNSTopic
+
+  WebAppSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-sns-topic"
+
+  WebAppSNSTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref WebAppSNSTopic
+      Protocol: email
+      Endpoint: !Ref EmailAddress
+
+Outputs:
+  WebAppUrl:
+    Description: URL of the web application
+    Value: !Sub "http://${WebAppLoadBalancer.DNSName}"

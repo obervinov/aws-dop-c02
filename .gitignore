@@ -1,0 +1,21 @@
+# General
+node_modules/
+dist/
+build/
+.env
+*.log
+*.tmp
+*.swp
+*.swo
+.idea/
+.vscode/
+coverage/
+.DS_Store
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Exclude macOS system files
+.DS_Store

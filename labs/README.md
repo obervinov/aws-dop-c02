@@ -31,7 +31,7 @@ Also:
         # Set up the web application monitoring environment
         aws cloudformation create-stack --stack-name app-errors-monitoring --template-body file://application-errors-monitoring/deploy.yaml --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 
-        # DON'T FORGET TO CONFIRM SNS EMAIL SUBSCRIPTION (check your email)
+        # DON'T FORGET TO CONFIRM SNS EMAIL SUBSCRIPTION https://docs.aws.amazon.com/sns/latest/dg/SendMessageToHttp.confirm.html
 
         # Get web application URL
         URL=$(aws cloudformation describe-stacks --stack-name app-errors-monitoring --query "Stacks[0].Outputs[?OutputKey=='WebAppUrl'].OutputValue" --output text)

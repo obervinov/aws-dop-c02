@@ -165,6 +165,7 @@ The application template uses AWS Serverless Application Model (AWS SAM) to defi
 To delete the sample application and all its provisioned AWS resources, use the AWS CLI. Assuming you used `sam-lambda-authorizer-demo` for the stack name, you can run the following:
 ```bash
 sam delete --stack-name sam-lambda-authorizer-demo
+aws s3 rb s3://lambda-authorizer-demo-packaged --force
 ```
 
 ## Resources

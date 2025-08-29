@@ -84,8 +84,8 @@ Also:
 
     Cleanup environment
     ```bash
+    sam delete --stack-name sam-lambda-authorizer-demo
     aws s3 rb s3://lambda-authorizer-demo-packaged --force
-    sam undeploy --stack-name sam-lambda-authorizer-demo
     ```
 
 3. **CodeBuild and Lambda Integration**

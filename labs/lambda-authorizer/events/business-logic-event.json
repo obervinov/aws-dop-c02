@@ -1,0 +1,13 @@
+{
+  "requestContext": {
+    "authorizer": {
+      "lambda": {
+        "userId": "testUser",
+        "roles": "tester",
+        "customData": "Local Test"
+      }
+    }
+  },
+  "path": "/hello",
+  "httpMethod": "GET"
+}

@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template demonstrating an API Gateway HTTP API with a custom Lambda Authorizer
+  acting as a mock authentication service, using local code directories.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: SamAuthorizerDemo
+    Description: A name for the project, used for resource naming.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: nodejs20.x
+    Architectures:
+      - x86_64
+
+Resources:
+  # --- 1. Authorizer Lambda Function (Mock Auth Service) ---
+  # This Lambda will validate the token and generate an IAM policy.
+  # The function code is located in the local directory 'auth_service/'.
+  MockAuthServiceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-MockAuthFunction"
+      Handler: auth.handler # Expects auth.js in the directory
+      CodeUri: auth_service/ # Points to the local directory with the code
+      Policies:
+        - AWSLambdaBasicExecutionRole # For writing logs to CloudWatch
+
+  # --- 2. Business Logic Lambda Function ---
+  # This Lambda will be invoked after successful authorization.
+  # The function code is located in the local directory 'business_logic/'.
+  BusinessLogicLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-BusinessLogicFunction"
+      Handler: app.handler # Expects app.js in the directory
+      CodeUri: business_logic/ # Points to the local directory with the code
+      Policies:
+        - AWSLambdaBasicExecutionRole # For writing logs to CloudWatch
+      Events:
+        GetRoot: # Integrating with HTTP API
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /hello
+            Method: get
+            PayloadFormatVersion: "2.0"
+
+  # --- 3. API Gateway HTTP API ---
+  # Define the HTTP API and configure the Lambda Authorizer.
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: Prod # API Gateway stage name
+      Auth: # Here we define our Lambda Authorizer
+        DefaultAuthorizer: HttpLambdaAuthorizer # Specify it as the default authorizer (optional)
+        Authorizers:
+          HttpLambdaAuthorizer: # Name to refer to the authorizer in Events
+            AuthorizerPayloadFormatVersion: "2.0" # Payload format for HTTP API
+            FunctionArn: !GetAtt MockAuthServiceLambda.Arn # ARN of our Authorizer Lambda function
+            AuthorizerResultTtlInSeconds: 300 # Policy caching time (300 seconds = 5 minutes)
+            EnableSimpleResponses: true
+            Identity:
+              Headers:
+                - Authorization
+
+  # --- 4. Permission fix to avoid Internal Server Error ---
+  # Grant API Gateway permission to invoke the Authorizer Lambda function.
+  ApiGatewayInvokeAuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt MockAuthServiceLambda.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !GetAtt HttpApi.ApiEndpoint
+
+  BusinessLogicLambdaArn:
+    Description: "ARN of the Business Logic Lambda Function"
+    Value: !GetAtt BusinessLogicLambda.Arn
+
+  AuthServiceLambdaArn:
+    Description: "ARN of the Authorizer Lambda Function"
+    Value: !GetAtt MockAuthServiceLambda.Arn

@@ -1,0 +1,7 @@
+{
+  "type": "REQUEST",
+  "methodArn": "arn:aws:execute-api:<region>:<account-id>:<api-id>/<stage>/GET/hello",
+  "headers": {
+    "Authorization": "Bearer valid-token"
+  }
+}

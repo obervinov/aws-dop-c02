@@ -19,3 +19,7 @@ Desktop.ini
 
 # Exclude macOS system files
 .DS_Store
+
+# AWS SAM build artifacts
+.aws-sam/
+packaged-template.yaml

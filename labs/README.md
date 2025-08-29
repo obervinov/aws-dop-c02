@@ -9,6 +9,7 @@ Also:
 ## Experiments
 1. **Web application errors monitoring**
    - **Description:** This experiment demonstrates how to monitor errors in a web application using AWS services and receive notifications.
+   - **Type:** CloudFormation
    - **Template:** `application-errors-monitoring/deploy.yaml`</br>
         Create ELB, EC2 instances with ELB, CloudWatch Logs and SNS topic.</br>
         First - prepare the environment (some CloudFormation parameters use SSM)</br>
@@ -24,6 +25,8 @@ Also:
             ```bash
             aws ssm put-parameter --name sns-email-notification-address --type String --value <your-email-address>
             ```
+
+        Deploy the CloudFormation stack
         ```bash
         # Set up the web application monitoring environment
         aws cloudformation create-stack --stack-name app-errors-monitoring --template-body file://application-errors-monitoring/deploy.yaml --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
@@ -40,9 +43,54 @@ Also:
         for i in {1..5}; do curl -f $URL/does-not-exist-path; done
         ```
 
-2. **CodeBuild and Lambda Integration**
-   - Description: This experiment demonstrates how to integrate AWS CodeBuild with AWS Lambda using a CodePipeline.
-   - Templates:
+        Cleanup all resources
+        ```bash
+        aws cloudformation delete-stack --stack-name app-errors-monitoring
+        ```
+
+2. **Lambda Authorizer**
+   - **Description:** This experiment demonstrates how to implement a Lambda Authorizer for API Gateway with custom authentication logic.
+   - **Type:** Serverless Application Model (SAM)
+   - **Documentation:** [Lambda Authorizer Documentation](lambda-authorizer/README.md)
+   - **Templates:**
+     - `lambda-authorizer/deploy.yaml` (Create the Lambda Authorizer and API Gateway)
+       ```bash
+       # Create bucket for packaged Lambda function
+       aws s3 mb s3://lambda-authorizer-demo-packaged
+
+       # Build and package the Lambda function
+       sam build --use-container
+       sam package \
+         --template-file template.yaml \
+         --output-template-file packaged-template.yaml \
+         --s3-bucket lambda-authorizer-demo-packaged
+
+       # Deploy the Lambda Authorizer + API Gateway + Mock Integration
+        sam deploy \
+          --template-file packaged-template.yaml \
+          --stack-name sam-lambda-authorizer-demo \
+          --capabilities CAPABILITY_IAM \
+          --confirm-changeset
+        
+        # Get API Gateway endpoint
+        URL=$(aws cloudformation describe-stacks --stack-name sam-lambda-authorizer-demo --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+
+        # Test the API Gateway endpoint without token (will return 401 Unauthorized)
+        curl -v $URL/Prod/hello
+
+        # Test the API Gateway endpoint with invalid token (will return 401 Unauthorized)
+        curl -v -H "Authorization: Bearer wrong-token" $URL/Prod/hello
+       ```
+
+    Cleanup environment
+    ```bash
+    aws s3 rb s3://lambda-authorizer-demo-packaged --force
+    sam undeploy --stack-name sam-lambda-authorizer-demo
+    ```
+
+3. **CodeBuild and Lambda Integration**
+   - **Description:** This experiment demonstrates how to integrate AWS CodeBuild with AWS Lambda using a CodePipeline.
+   - **Templates:**
         - `codepipeline-experiments/0.codedeploy-env.yaml` (Create the general dependencies of this experiment)
             ```bash
             # Deploy the general environment

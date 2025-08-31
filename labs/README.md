@@ -120,3 +120,249 @@ This experiment demonstrates how to implement a Lambda Authorizer for API Gatewa
     sam delete --stack-name sam-lambda-authorizer-demo
     aws s3 rb s3://lambda-authorizer-demo-packaged --force
     ```
+
+### Lambda Update Strategy
+This experiment demonstrates how to implement a different update strategies for AWS Lambda functions using AWS SAM.
+
+**Type:** Serverless Application Model (SAM)
+
+**Extended Documentation:** [Lambda Update Strategy Documentation](lambda-update-strategy/README.md) (auto-generated from AWS SAM Quick Template)
+
+**Template:** [lambda-update-strategy/deploy.yaml](lambda-update-strategy/deploy.yaml)
+
+**AWS Resources:**
+- ApplicationInsights
+- CodeDeploy
+- IAM Roles
+- Lambda Function
+- API Gateway
+
+1. **Prepare the environment**
+    ```bash
+    aws s3 mb s3://lambda-update-strategy-demo-packaged
+    ```
+
+2. **Build and package the Lambda function**
+    ```bash
+       sam build --use-container
+       sam package \
+         --template-file template.yaml \
+         --output-template-file packaged-template.yaml \
+         --s3-bucket lambda-update-strategy-demo-packaged
+    ```
+
+3. **Deploy the Lambda function + API Gateway**
+    ```bash
+        sam deploy \
+            --template-file packaged-template.yaml \
+            --stack-name sam-lambda-update-strategy-demo \
+            --capabilities CAPABILITY_IAM \
+            --confirm-changeset
+    ```
+    Test connection
+    ```bash
+        URL=$(aws cloudformation describe-stacks --stack-name sam-lambda-update-strategy-demo --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+        curl $URL
+    ```
+    Output
+    ```json
+        {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+    ```
+
+4. **Testing Canary Deployment**
+    - Edit the constant `RELEASE_VERSION` in the [hello_world/app.py](hello_world/app.py) file to change the version number to `v1.1` and re-build the application
+    ```bash
+       sam build --use-container
+       sam package \
+         --template-file template.yaml \
+         --output-template-file packaged-template.yaml \
+         --s3-bucket lambda-update-strategy-demo-packaged
+    ```
+    - Update stack with new update strategy
+    ```bash
+        sam deploy \
+            --template-file packaged-template.yaml \
+            --stack-name sam-lambda-update-strategy-demo \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides DeploymentStrategy=CodeDeployDefault.LambdaCanary10Percent5Minutes \
+            --confirm-changeset
+    ```
+    - Test the API Gateway endpoint during deployment
+    ```bash
+        URL=$(aws cloudformation describe-stacks --stack-name sam-lambda-update-strategy-demo --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+        for j in {1..3}; do for i in {1..10}; do curl $URL && echo ""; done; [ $j -lt 5 ] && sleep 150 && echo "Next batch..."; done
+    ```
+    The part of request that is being tested is the response from the Lambda function, which should now include the updated version number.
+    <details>
+      <summary>Something like this (collapse)</summary>
+        ```json
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            Next batch...
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.0 (CodeDeployDefault.LambdaAllAtOnce)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            Next batch...
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+            {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        ```
+    </details>
+
+
+5. **Testing Linear Deployment**
+    - Edit the constant `RELEASE_VERSION` in the [hello_world/app.py](hello_world/app.py) file to change the version number to `v1.2` and re-build the application
+   ```bash
+       sam build --use-container
+       sam package \
+         --template-file template.yaml \
+         --output-template-file packaged-template.yaml \
+         --s3-bucket lambda-update-strategy-demo-packaged
+   ```
+   - Update stack with new update strategy
+   ```bash
+        sam deploy \
+        --template-file packaged-template.yaml \
+        --stack-name sam-lambda-update-strategy-demo \
+        --capabilities CAPABILITY_IAM \
+        --parameter-overrides DeploymentStrategy=CodeDeployDefault.LambdaLinear10PercentEvery1Minute \
+        --confirm-changeset
+   ```
+   - Test the API Gateway endpoint again to see the updated response.
+   ```bash
+    URL=$(aws cloudformation describe-stacks --stack-name sam-lambda-update-strategy-demo --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+    for j in {1..10}; do for i in {1..10}; do curl $URL && echo ""; done; [ $j -lt 5 ] && sleep 60 && echo "Next batch..."; done
+   ```
+    The part of request that is being tested is the response from the Lambda function, which should now include the updated version number.
+    <details>
+      <summary>Something like this (collapse)</summary>
+        ```json
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        Next batch...
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        {"message": "Hello world. Lambda v1.1 (CodeDeployDefault.LambdaCanary10Percent5Minutes)"}
+        {"message": "Hello world. Lambda v1.2 (CodeDeployDefault.LambdaLinear10PercentEvery1Minute)"}
+        ```
+    </details>
+
+6. **Cleanup all resources**
+    ```bash
+    sam delete --stack-name sam-lambda-update-strategy-demo
+    aws s3 rb s3://lambda-update-strategy-demo-packaged --force
+    ```

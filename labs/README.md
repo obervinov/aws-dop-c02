@@ -439,11 +439,16 @@ _This project demonstrates a solution to a common challenge: validating the inte
     ```
     _Pipelines will be triggered automatically after the new source code is uploaded to S3. Just wait a few minutes for the pipelines to complete._
 
-    __Test Pipeline Second Run__
+    _Pipelines list_
+    ![Pipelines list](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipelines_list.png)
+
+    _TEST pipeline Second Run_
     ![TEST pipeline second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipeline_test_env.png)
 
+    _UAT pipeline second run_
     ![UAT pipeline second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipeline_uat_env.png)
 
+    _CloudWatch Logs second run_
     ![CloudWatch Logs second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_cw_logs.png)
 
 **Notes**

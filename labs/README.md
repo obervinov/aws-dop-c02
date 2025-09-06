@@ -431,7 +431,7 @@ _This project demonstrates a solution to a common challenge: validating the inte
     ![CloudWatch Logs first run](../resources/screenshots/codebuild-artifacts-validator/first_attempt_cw_logs.png)
 
 6. **Next, we will modify `buildspec.yml` file to make the artifacts with dynamic values.**
-    - Add `${ENV}` variable in seventh line of [codebuild-artifacts-validator/source/buildspec.yml](codebuild-artifacts-validator/source/buildspec.yml), like this `echo "${ENV} successfully builded" > artifact.txt`
+    - Add `${ENV}` variable in seventh line of [codebuild-artifacts-validator/source/buildspec.yml](codebuild-artifacts-validator/source/buildspec.yml), like this: `echo "${ENV} successfully builded" > artifact.txt`
     - Create a new `source.zip` file and upload it to S3.
     ```bash
     zip -r source.zip source

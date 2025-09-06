@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudFormation template for a CodeBuild projects and Lambda artifacts validator.
+
+Parameters:
+  BuilderImage:
+    Type: String
+    Default: aws/codebuild/amazonlinux-x86_64-standard:4.0
+  SourceBucket:
+    Type: String
+    Description: The S3 bucket where the source code is stored.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetBucketLocation'
+                  - 's3:ListBucket'
+                  - 'codepipeline:PutJobSuccessResult'
+                  - 'codepipeline:PutJobFailureResult'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: validator/
+      Handler: app.lambda_handler
+      Runtime: python3.13
+      Architectures:
+        - x86_64
+      AutoPublishAlias: live
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${LambdaFunction}"
+      RetentionInDays: 1
+
+  CodePipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}"
+      VersioningConfiguration:
+        Status: Enabled
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:PutObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CodePipelineBucket}/*'
+                  - !Sub 'arn:aws:s3:::${SourceBucket}/*'
+
+  CodeBuildProjectTest:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-codebuild-test'
+      Description: Test build project
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref BuilderImage
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: source/buildspec.yml
+      TimeoutInMinutes: 10
+
+  CodeBuildProjectUAT:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-codebuild-uat'
+      Description: UAT build project
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref BuilderImage
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: source/buildspec.yml
+      TimeoutInMinutes: 10
+
+  PipelineTest:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                S3Bucket: !Ref SourceBucket
+                S3ObjectKey: source.zip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Sub '${AWS::StackName}-codebuild-test'
+                EnvironmentVariables: !Sub '[{"name":"ENV","value":"test","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+            - Name: SaveArtifactToS3
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              InputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                BucketName: !Ref CodePipelineBucket
+                Extract: false
+                ObjectKey: !Sub "test-artifact/artifact.zip"
+              RunOrder: 2
+
+  PipelineUAT:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                S3Bucket: !Ref SourceBucket
+                S3ObjectKey: source.zip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Sub '${AWS::StackName}-codebuild-uat'
+                EnvironmentVariables: !Sub '[{"name":"ENV","value":"uat","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+        - Name: Test
+          Actions:
+            - Name: ValidateArtifact
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              InputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                FunctionName: !Ref LambdaFunction
+              RunOrder: 1
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodePipelineServicePolicy
+          PolicyDocument:
+            Statement:
+              # Artifacts bucket
+              - Effect: Allow
+                Action:
+                - 's3:GetBucketVersioning'
+                - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CodePipelineBucket}'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': !Ref 'AWS::AccountId'
+              - Effect: Allow
+                Action:
+                - 's3:PutObject'
+                - 's3:PutObjectAcl'
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+                - 's3:GetObjectAcl'
+                - 's3:GetObjectTagging'
+                - 's3:GetObjectVersionTagging'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CodePipelineBucket}/*'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': !Ref 'AWS::AccountId'
+              # Source code bucket
+              - Effect: Allow
+                Action:
+                - 's3:GetBucketVersioning'
+                - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${SourceBucket}'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': !Ref 'AWS::AccountId'
+              - Effect: Allow
+                Action:
+                - 's3:PutObject'
+                - 's3:PutObjectAcl'
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+                - 's3:GetObjectAcl'
+                - 's3:GetObjectTagging'
+                - 's3:GetObjectVersionTagging'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${SourceBucket}/*'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': !Ref 'AWS::AccountId'
+              # KMS https://stackoverflow.com/questions/54779296/aws-codepipeline-permission-error-on-release-change-action
+              - Effect: Allow
+                Action:
+                - 'kms:Encrypt'
+                - 'kms:Decrypt'
+                - 'kms:ReEncrypt*'
+                - 'kms:GenerateDataKey*'
+                - 'kms:CreateGrant'
+                - 'kms:DescribeKey'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: !GetAtt LambdaFunction.Arn
+              # CodeBuild permissions for pipelines
+              - Effect: Allow
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:BatchGetProjects'
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AWS::StackName}-codebuild-test'
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AWS::StackName}-codebuild-uat'

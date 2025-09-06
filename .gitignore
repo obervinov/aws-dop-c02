@@ -23,3 +23,4 @@ Desktop.ini
 # AWS SAM build artifacts
 .aws-sam/
 packaged-template.yaml
+source.zip

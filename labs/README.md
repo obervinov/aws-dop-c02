@@ -5,6 +5,7 @@ All experiments describes as **CloudFormation** templates or **SAM** projects be
 1. [Web application errors monitoring](#web-application-errors-monitoring)
 2. [Lambda Authorizer](#lambda-authorizer)
 3. [Lambda Update Strategy](#lambda-update-strategy)
+4. [CodeBuild Artifacts Validator](#codebuild-artifacts-validator)
 
 
 
@@ -65,7 +66,7 @@ This experiment demonstrates how to implement a Lambda Authorizer for API Gatewa
 
 **Extended Documentation:** [Lambda Authorizer Documentation](lambda-authorizer/README.md)
 
-**Template:** [lambda-authorizer/deploy.yaml](lambda-authorizer/deploy.yaml)
+**Template:** [lambda-authorizer/template.yaml](lambda-authorizer/template.yaml)
 
 **AWS Resources:**
 - Lambda functions (Mock Authorizer and Main Function)
@@ -129,7 +130,7 @@ This experiment demonstrates how to implement a different update strategies for 
 
 **Extended Documentation:** [Lambda Update Strategy Documentation](lambda-update-strategy/README.md) (auto-generated from AWS SAM Quick Template)
 
-**Template:** [lambda-update-strategy/deploy.yaml](lambda-update-strategy/deploy.yaml)
+**Template:** [lambda-update-strategy/template.yaml](lambda-update-strategy/template.yaml)
 
 **AWS Resources:**
 - Application Insights
@@ -361,3 +362,110 @@ This experiment demonstrates how to implement a different update strategies for 
     sam delete --stack-name sam-lambda-update-strategy-demo
     aws s3 rb s3://lambda-update-strategy-demo-packaged --force
     ```
+
+### CodeBuild Artifacts Validator
+This project demonstrates a powerful integration pattern: using a Lambda function as a validation gate within an AWS CodePipeline. The Lambda is configured to be invoked as a CodePipeline action, where it analyzes and verifies artifacts produced by a preceding CodeBuild project. This pattern is highly adaptable and can be extended to various validation and automation tasks within CI/CD pipelines.
+
+_This project demonstrates a solution to a common challenge: validating the integrity of artifacts produced by two independent build pipelines. While the architectural best practice is to create a single, immutable artifact and carry it between environments, we often have to work with existing infrastructure. This solution shows how to ensure build reproducibility and environment consistency without the need for a complete pipeline refactoring. It's a pragmatic approach to a real-world problem._
+
+**Type:** Serverless Application Model (SAM)
+
+**Extended Documentation:** [CodeBuild Artifacts Validator Documentation](codebuild-artifacts-validator/README.md)
+
+**Template:** [codebuild-artifacts-validator/template.yaml](codebuild-artifacts-validator/template.yaml)
+
+**AWS Resources:**
+- CodeBuild Projects
+- Lambda Function
+- IAM Roles
+- CodePipeline
+- S3 Bucket
+- CloudWatch Logs
+
+1. **Prepare the environment: S3 bucket with versioning for source code** (versioning is required for the CodePipeline)
+   ```bash
+    aws s3 mb s3://codebuild-artifacts-validator
+    aws s3api put-bucket-versioning --bucket codebuild-artifacts-validator --versioning-configuration Status=Enabled
+   ```
+   _S3 bucket will also be used as a source code repository instead of CodeCommit/GitHub/Gitlab/Bitbucket to avoid unnecessary complexity and additional dependencies._
+2. **Upload the source code to the S3 bucket.**
+   ```bash
+   cd codebuild-artifacts-validator
+   zip -r source.zip source
+   aws s3 cp source.zip s3://codebuild-artifacts-validator
+   ```
+3. **Build and package SAM application.**
+   ```bash
+       sam build --use-container
+       sam package \
+         --template-file template.yaml \
+         --output-template-file packaged-template.yaml \
+         --s3-bucket codebuild-artifacts-validator
+   ```
+4. **Deploy the SAM application.**
+   ```bash
+   sam deploy \
+     --template-file packaged-template.yaml \
+     --stack-name sam-codebuild-artifacts-validator \
+     --capabilities CAPABILITY_IAM \
+     --disable-rollback \
+     --parameter-overrides SourceBucket=codebuild-artifacts-validator
+   ```
+    Get CodeBuild AMIs list
+    ```bash
+    aws codebuild list-curated-environment-images
+    ```
+5. **Check results in CodePipeline Pipeline UI and CloudWatch Logs** (first result should show the successful validation).
+    - [CodePipeline](https://us-east-1.console.aws.amazon.com/codesuite/codepipeline/pipelines)
+    - [CloudWatch Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home)
+
+    _Pipelines list_
+    ![Pipelines list](../resources/screenshots/codebuild-artifacts-validator/first_attempt_pipelines_list.png)
+
+    _TEST pipeline first run_
+    ![TEST pipeline first run](../resources/screenshots/codebuild-artifacts-validator/first_attempt_pipeline_test_env.png)
+    _UAT pipeline first run_
+    ![UAT pipeline first run](../resources/screenshots/codebuild-artifacts-validator/first_attempt_pipeline_uat_env.png)
+
+    _CloudWatch Logs first run_
+    ![CloudWatch Logs first run](../resources/screenshots/codebuild-artifacts-validator/first_attempt_cw_logs.png)
+
+6. **Next, we will modify `buildspec.yml` file to make the artifacts with dynamic values.**
+    - Add `${ENV}` variable in seventh line of [codebuild-artifacts-validator/source/buildspec.yml](codebuild-artifacts-validator/source/buildspec.yml), like this: `echo "${ENV} successfully builded" > artifact.txt`
+    - Create a new `source.zip` file and upload it to S3.
+    ```bash
+    zip -r source.zip source
+    aws s3 cp source.zip s3://codebuild-artifacts-validator
+    ```
+    _Pipelines will be triggered automatically after the new source code is uploaded to S3. Just wait a few minutes for the pipelines to complete._
+
+    _Pipelines list_
+    ![Pipelines list](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipelines_list.png)
+
+    _TEST pipeline Second Run_
+    ![TEST pipeline second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipeline_test_env.png)
+
+    _UAT pipeline second run_
+    ![UAT pipeline second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_pipeline_uat_env.png)
+
+    _CloudWatch Logs second run_
+    ![CloudWatch Logs second run](../resources/screenshots/codebuild-artifacts-validator/second_attempt_cw_logs.png)
+
+**Notes**
+- To simplify the example, the lambda template and code use a fixed name and path of the object with the artifact. But of course, this process can be made more flexible by removing the step with explicit storage of the object in `template.yaml` and modified the Lambda so that it automatically receives data about the `Test` build after completion and finds the created artifact in S3 by revision number (this is done by several additional methods through the `boto3` module).
+
+- It was also a discovery for me that CodeBuild collects artifacts with nested zip archives. I had to spend a significant amount of time debugging it.
+
+7. **Cleanup resources**
+   ```bash
+    # A little bit more complex cleanup because the versioning was enabled
+    VERSIONS=$(aws s3api list-object-versions --bucket codebuild-artifacts-validator --output json --query='{Objects: Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')
+    aws s3api delete-objects --bucket codebuild-artifacts-validator --delete "$(echo $VERSIONS | jq '{Objects: (.Objects + .DeleteMarkers), Quiet: true}')"
+    aws s3 rb s3://codebuild-artifacts-validator --force
+
+    VERSIONS=$(aws s3api list-object-versions --bucket sam-codebuild-artifacts-validator --output json --query='{Objects: Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')
+    aws s3api delete-objects --bucket sam-codebuild-artifacts-validator --delete "$(echo $VERSIONS | jq '{Objects: (.Objects + .DeleteMarkers), Quiet: true}')"
+    aws s3 rb s3://sam-codebuild-artifacts-validator --force
+
+    aws cloudformation delete-stack --stack-name sam-codebuild-artifacts-validator
+   ```

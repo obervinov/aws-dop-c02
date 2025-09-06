@@ -382,19 +382,19 @@ _This project demonstrates a solution to a common challenge: validating the inte
 - S3 Bucket
 - CloudWatch Logs
 
-1. Prepare the environment: S3 bucket with versioning for source code (versioning is required for the CodePipeline)
+1. **Prepare the environment: S3 bucket with versioning for source code** (versioning is required for the CodePipeline)
    ```bash
     aws s3 mb s3://codebuild-artifacts-validator
     aws s3api put-bucket-versioning --bucket codebuild-artifacts-validator --versioning-configuration Status=Enabled
    ```
    _S3 bucket will also be used as a source code repository instead of CodeCommit/GitHub/Gitlab/Bitbucket to avoid unnecessary complexity and additional dependencies._
-2. Upload the source code to the S3 bucket.
+2. **Upload the source code to the S3 bucket.**
    ```bash
    cd codebuild-artifacts-validator
    zip -r source.zip source
    aws s3 cp source.zip s3://codebuild-artifacts-validator
    ```
-3. Build and package SAM application.
+3. **Build and package SAM application.**
    ```bash
        sam build --use-container
        sam package \
@@ -402,7 +402,7 @@ _This project demonstrates a solution to a common challenge: validating the inte
          --output-template-file packaged-template.yaml \
          --s3-bucket codebuild-artifacts-validator
    ```
-4. Deploy the SAM application.
+4. **Deploy the SAM application.**
    ```bash
    sam deploy \
      --template-file packaged-template.yaml \
@@ -415,7 +415,7 @@ _This project demonstrates a solution to a common challenge: validating the inte
     ```bash
     aws codebuild list-curated-environment-images
     ```
-5. Check results in CodePipeline Pipeline UI and CloudWatch Logs (first result should show the successful validation).
+5. **Check results in CodePipeline Pipeline UI and CloudWatch Logs** (first result should show the successful validation).
     - [CodePipeline](https://us-east-1.console.aws.amazon.com/codesuite/codepipeline/pipelines)
     - [CloudWatch Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home)
 
@@ -430,7 +430,7 @@ _This project demonstrates a solution to a common challenge: validating the inte
     _CloudWatch Logs first run_
     ![CloudWatch Logs first run](../resources/screenshots/codebuild-artifacts-validator/first_attempt_cw_logs.png)
 
-6. Next, we will modify `buildspec.yml` file to make the artifacts with dynamic values.
+6. **Next, we will modify `buildspec.yml` file to make the artifacts with dynamic values.**
     - Add `${ENV}` variable in seventh line of [codebuild-artifacts-validator/source/buildspec.yml](codebuild-artifacts-validator/source/buildspec.yml), like this `echo "${ENV} successfully builded" > artifact.txt`
     - Create a new `source.zip` file and upload it to S3.
     ```bash
@@ -448,3 +448,17 @@ _This project demonstrates a solution to a common challenge: validating the inte
 
 **Notes**
 - To simplify the example, the lambda template and code use a fixed name and path of the object with the artifact. But of course, this process can be made more flexible by removing the step with explicit storage of the object in `template.yaml` and modified the Lambda so that it automatically receives data about the `Test` build after completion and finds the created artifact in S3 by revision number (this is done by several additional methods through the `boto3` module).
+
+7. **Cleanup resources**
+   ```bash
+    # A little bit more complex cleanup because the versioning was enabled
+    VERSIONS=$(aws s3api list-object-versions --bucket codebuild-artifacts-validator --output json --query='{Objects: Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')
+    aws s3api delete-objects --bucket codebuild-artifacts-validator --delete "$(echo $VERSIONS | jq '{Objects: (.Objects + .DeleteMarkers), Quiet: true}')"
+    aws s3 rb s3://codebuild-artifacts-validator --force
+
+    VERSIONS=$(aws s3api list-object-versions --bucket sam-codebuild-artifacts-validator --output json --query='{Objects: Versions[].{Key:Key,VersionId:VersionId},DeleteMarkers: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')
+    aws s3api delete-objects --bucket sam-codebuild-artifacts-validator --delete "$(echo $VERSIONS | jq '{Objects: (.Objects + .DeleteMarkers), Quiet: true}')"
+    aws s3 rb s3://sam-codebuild-artifacts-validator --force
+
+    aws cloudformation delete-stack --stack-name sam-codebuild-artifacts-validator
+   ```

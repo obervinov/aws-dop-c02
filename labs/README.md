@@ -66,7 +66,7 @@ This experiment demonstrates how to implement a Lambda Authorizer for API Gatewa
 
 **Extended Documentation:** [Lambda Authorizer Documentation](lambda-authorizer/README.md)
 
-**Template:** [lambda-authorizer/deploy.yaml](lambda-authorizer/deploy.yaml)
+**Template:** [lambda-authorizer/template.yaml](lambda-authorizer/template.yaml)
 
 **AWS Resources:**
 - Lambda functions (Mock Authorizer and Main Function)
@@ -130,7 +130,7 @@ This experiment demonstrates how to implement a different update strategies for 
 
 **Extended Documentation:** [Lambda Update Strategy Documentation](lambda-update-strategy/README.md) (auto-generated from AWS SAM Quick Template)
 
-**Template:** [lambda-update-strategy/deploy.yaml](lambda-update-strategy/deploy.yaml)
+**Template:** [lambda-update-strategy/template.yaml](lambda-update-strategy/template.yaml)
 
 **AWS Resources:**
 - Application Insights
@@ -372,7 +372,7 @@ _This project demonstrates a solution to a common challenge: validating the inte
 
 **Extended Documentation:** [CodeBuild Artifacts Validator Documentation](codebuild-artifacts-validator/README.md)
 
-**Template:** [codebuild-artifacts-validator/deploy.yaml](codebuild-artifacts-validator/deploy.yaml)
+**Template:** [codebuild-artifacts-validator/template.yaml](codebuild-artifacts-validator/template.yaml)
 
 **AWS Resources:**
 - CodeBuild Projects

@@ -6,6 +6,6 @@ All labs are designed to help you understand and implement AWS services effectiv
 All labs is described as IaC. 
 
 
-- [Labs list](./_labs/README.md)
-- [Additional Documentation](./_docs)
+- [Labs list](./labs/README.md)
+- [Additional Documentation](./docs)
 - [Static Resources for labs and manually experimenting](./resources)

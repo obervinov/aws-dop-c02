@@ -1,0 +1,15 @@
+# Run 2
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - echo "successfully builded" > artifact.txt
+      - zip -r artifact.zip artifact.txt
+
+artifacts:
+  name: MyBuildArtifact
+  files:
+    - 'artifact.zip'
+  discard-paths: yes
+

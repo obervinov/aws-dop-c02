@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for a CodeBuild projects and Lambda artifacts
+  validator.
+Properties:
+  BuilderImage:
+    Type: String
+    Default: aws/codebuild/amazonlinux-x86_64-standard:4.0-1.0.0
+Parameters:
+  SourceBucket:
+    Type: String
+    Description: The S3 bucket where the source code is stored.
+  CodePipelineArtifactBucket:
+    Type: String
+    Description: The S3 bucket for CodePipeline artifacts.
+Resources:
+  PipelineTest:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn:
+        Fn::GetAtt:
+        - CodePipelineRole
+        - Arn
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: CodePipelineArtifactBucket
+      Stages:
+      - Name: Source
+        Actions:
+        - Name: GetSourceFromS3
+          ActionTypeId:
+            Category: Source
+            Owner: AWS
+            Provider: S3
+            Version: '1'
+          OutputArtifacts:
+          - Name: SourceArtifact
+          Configuration:
+            BucketName:
+              Ref: SourceBucket
+            ObjectKey: source.zip
+          RunOrder: 1
+      - Name: Build
+        Actions:
+        - Name: Build
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Provider: CodeBuild
+            Version: '1'
+          Configuration:
+            ProjectName:
+              Ref: CodeBuildProjectTest
+            EnvironmentVariables:
+            - Name: ENV
+              Value: test
+              Type: PLAINTEXT
+          InputArtifacts:
+          - Name: SourceArtifact
+          OutputArtifacts:
+          - Name: BuildArtifact
+          RunOrder: 1
+      - Name: Test
+        Actions:
+        - Name: ValidateArtifact
+          ActionTypeId:
+            Category: Invoke
+            Owner: AWS
+            Provider: Lambda
+            Version: '1'
+          InputArtifacts:
+          - Name: BuildArtifact
+          Configuration:
+            FunctionName:
+              Ref: ArtifactValidationLambdaFunction
+          RunOrder: 1
+    Metadata:
+      SamResourceId: PipelineTest
+  PipelineUAT:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn:
+        Fn::GetAtt:
+        - CodePipelineRole
+        - Arn
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: CodePipelineArtifactBucket
+      Stages:
+      - Name: Source
+        Actions:
+        - Name: GetSourceFromS3
+          ActionTypeId:
+            Category: Source
+            Owner: AWS
+            Provider: S3
+            Version: '1'
+          OutputArtifacts:
+          - Name: SourceArtifact
+          Configuration:
+            BucketName:
+              Ref: SourceBucket
+            ObjectKey:
+              Ref: SourceObjectKey
+          RunOrder: 1
+      - Name: Build
+        Actions:
+        - Name: Build
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Provider: CodeBuild
+            Version: '1'
+          Configuration:
+            ProjectName:
+              Ref: CodeBuildProjectTest
+          InputArtifacts:
+          - Name: SourceArtifact
+          OutputArtifacts:
+          - Name: BuildArtifact
+          RunOrder: 1
+      - Name: Test
+        Actions:
+        - Name: ValidateArtifact
+          ActionTypeId:
+            Category: Invoke
+            Owner: AWS
+            Provider: Lambda
+            Version: '1'
+          InputArtifacts:
+          - Name: BuildArtifact
+          Configuration:
+            FunctionName:
+              Ref: ArtifactValidationLambdaFunction
+          RunOrder: 1
+    Metadata:
+      SamResourceId: PipelineUAT
+  ArtifactValidationLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      Runtime: python3.13
+      Code:
+        ZipFile: "# Your Lambda code for validation goes here\ndef handler(event,\
+          \ context):\n    print(json.dumps(event, indent=2))\n    jobId = event['CodePipeline.job'].id\n\
+          \    artifact = event['CodePipeline.job'].data.inputArtifacts[0]\n\n   \
+          \ # Your validation logic:\n    # 1. Get the artifact from S3 using the\
+          \ event details\n    s3_client = boto3.client('s3')\n    bucket = artifact.s3Location.bucketName\n\
+          \    key = artifact.s3Location.objectKey\n    response = s3_client.get_object(Bucket=bucket,\
+          \ Key=key)\n    artifact_content = response['Body'].read()\n\n    # 2. Perform\
+          \ the hash check\n    expected_hash = artifact.metadata['hash']\n    actual_hash\
+          \ = hashlib.sha256(artifact_content).hexdigest()\n    if actual_hash !=\
+          \ expected_hash:\n        print(f\"Hash mismatch: {actual_hash} != {expected_hash}\"\
+          )\n        return 'Validation failed.'\n\n    # 3. Call putJobSuccessResult\
+          \ or putJobFailureResult\n    codepipeline_client = boto3.client('codepipeline')\n\
+          \    codepipeline_client.put_job_success_result(jobId=jobId)\n    return\
+          \ 'Validation complete.'\n"
+    Metadata:
+      SamResourceId: ArtifactValidationLambdaFunction
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: CodePipelineServicePolicy
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:GetBucketLocation
+            - s3:ListBucket
+            - codebuild:StartBuild
+            - lambda:InvokeFunction
+            Resource:
+            - Fn::Sub: arn:aws:s3:::${SourceS3Bucket}/*
+            - Fn::Sub: arn:aws:s3:::${SourceS3Bucket}
+            - Fn::Sub: arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${CodeBuildProjectTest}
+            - Ref: ArtifactValidationLambdaFunction
+    Metadata:
+      SamResourceId: CodePipelineRole
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: LambdaPolicy
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:GetBucketLocation
+            - s3:ListBucket
+            - codepipeline:PutJobSuccessResult
+            - codepipeline:PutJobFailureResult
+            Resource: '*'
+    Metadata:
+      SamResourceId: LambdaExecutionRole

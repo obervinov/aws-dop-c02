@@ -454,6 +454,8 @@ _This project demonstrates a solution to a common challenge: validating the inte
 **Notes**
 - To simplify the example, the lambda template and code use a fixed name and path of the object with the artifact. But of course, this process can be made more flexible by removing the step with explicit storage of the object in `template.yaml` and modified the Lambda so that it automatically receives data about the `Test` build after completion and finds the created artifact in S3 by revision number (this is done by several additional methods through the `boto3` module).
 
+- It was also a discovery for me that CodeBuild collects artifacts with nested zip archives. I had to spend a significant amount of time debugging it.
+
 7. **Cleanup resources**
    ```bash
     # A little bit more complex cleanup because the versioning was enabled
